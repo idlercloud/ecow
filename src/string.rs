@@ -6,6 +6,7 @@ use core::cmp::Ordering;
 use core::fmt::{self, Debug, Display, Formatter, Write};
 use core::hash::{Hash, Hasher};
 use core::ops::{Add, AddAssign, Deref};
+use core::str::Utf8Error;
 
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
@@ -100,6 +101,32 @@ impl EcoString {
     #[inline]
     fn from_str(string: &str) -> Self {
         Self(DynamicVec::from_slice(string.as_bytes()))
+    }
+
+    /// Create an instance from a bytes slice.
+    #[inline]
+    pub fn from_utf8<B: AsRef<[u8]>>(buf: B) -> Result<Self, Utf8Error> {
+        core::str::from_utf8(buf.as_ref()).map(EcoString::from)
+    }
+
+    /// Decode a [`UTF-16`](https://en.wikipedia.org/wiki/UTF-16) slice of bytes into a
+    /// [`EcoString`], returning an [`Err`] if the slice contains any invalid data.
+    #[inline]
+    pub fn from_utf16<B: AsRef<[u16]>>(buf: B) -> Result<Self, Utf16Error> {
+        // Note: we don't use collect::<Result<_, _>>() because that fails to pre-allocate a buffer,
+        // even though the size of our iterator, `buf`, is known ahead of time.
+        //
+        // rustlang issue #48994 is tracking the fix
+        let buf = buf.as_ref();
+        let mut ret = EcoString::with_capacity(buf.len());
+        for c in core::char::decode_utf16(buf.iter().copied()) {
+            if let Ok(c) = c {
+                ret.push(c);
+            } else {
+                return Err(Utf16Error(()));
+            }
+        }
+        Ok(ret)
     }
 
     /// Whether the string is empty.
@@ -503,6 +530,18 @@ impl From<&EcoString> for String {
 #[cold]
 const fn exceeded_inline_capacity() -> ! {
     panic!("exceeded inline capacity");
+}
+
+/// A possible error value when converting a [`EcoString`] from a UTF-16 byte slice.
+///
+/// This type is the error type for the [`EcoString::from_utf16`] method.
+#[derive(Copy, Clone, Debug)]
+pub struct Utf16Error(());
+
+impl fmt::Display for Utf16Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt("invalid utf-16: lone surrogate found", f)
+    }
 }
 
 #[cfg(feature = "serde")]
